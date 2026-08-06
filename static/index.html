@@ -1,1 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Real‑time Anomaly Detector</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 20px; }
+        .container { max-width: 1200px; margin: auto; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .alert-list { max-height: 200px; overflow-y: auto; }
+        .alert-item { padding: 5px 0; border-bottom: 1px solid #eee; }
+        .alert-item .time { color: #888; font-size: 0.8em; }
+        .anomaly-marker { color: red; font-weight: bold; }
+        #chart-container { position: relative; height: 300px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📊 Real‑time Anomaly Detector</h1>
+    <div class="card">
+        <h3>Live Data Stream</h3>
+        <div id="chart-container">
+            <canvas id="liveChart"></canvas>
+        </div>
+    </div>
+    <div class="card">
+        <h3>Recent Alerts <span id="alertCount">0</span></h3>
+        <div id="alerts" class="alert-list">
+            <p>Waiting for anomalies...</p>
+        </div>
+    </div>
+</div>
 
+<script>
+    // --------------------------------------------------------------
+    // Chart setup
+    // --------------------------------------------------------------
+    const ctx = document.getElementById('liveChart').getContext('2d');
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Sensor Value',
+                    data: [],
+                    borderColor: 'blue',
+                    fill: false,
+                    pointRadius: 3,
+                },
+                {
+                    label: 'Anomaly',
+                    data: [],
+                    backgroundColor: 'red',
+                    borderColor: 'red',
+                    pointRadius: 8,
+                    pointStyle: 'cross',
+                    showLine: false,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: true },
+            },
+            scales: {
+                x: { display: true, title: { display: true, text: 'Time' } },
+                y: { display: true, title: { display: true, text: 'Value' } }
+            }
+        }
+    });
+
+    const MAX_POINTS = 50;
+
+    // --------------------------------------------------------------
+    // Load historical data first
+    // --------------------------------------------------------------
+    fetch('/history?limit=50')
+        .then(res => res.json())
+        .then(data => {
+            data.forEach(dp => {
+                addPoint(dp);
+            });
+            chart.update();
+        });
+
+    function addPoint(dp) {
+        const time = new Date(dp.timestamp).toLocaleTimeString();
+        // Add to chart
+        chart.data.labels.push(time);
+        chart.data.datasets[0].data.push(dp.value);
+        if (dp.is_anomaly) {
+            chart.data.datasets[1].data.push(dp.value);
+        } else {
+            // push null to keep alignment
+            chart.data.datasets[1].data.push(null);
+        }
+        // Keep only last MAX_POINTS
+        if (chart.data.labels.length > MAX_POINTS) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
+            chart.data.datasets[1].data.shift();
+        }
+        chart.update();
+    }
+
+    // --------------------------------------------------------------
+    // WebSocket connection for live anomalies
+    // --------------------------------------------------------------
+    const alertsDiv = document.getElementById('alerts');
+    const alertCountSpan = document.getElementById('alertCount');
+    let alertCount = 0;
+
+    function addAlert(dp) {
+        const time = new Date(dp.timestamp).toLocaleTimeString();
+        const item = document.createElement('div');
+        item.className = 'alert-item';
+        item.innerHTML = `<span class="anomaly-marker">⚠️ Anomaly</span> value: <b>${dp.value}</b> <span class="time">at ${time}</span>`;
+        alertsDiv.prepend(item); // newest at top
+        // Keep only last 10 alerts
+        while (alertsDiv.children.length > 10) {
+            alertsDiv.removeChild(alertsDiv.lastChild);
+        }
+        alertCount++;
+        alertCountSpan.textContent = alertCount;
+    }
+
+    // Connect to WebSocket
+    const ws = new WebSocket(`ws://${window.location.host}/ws`);
+    ws.onmessage = function(event) {
+        const dp = JSON.parse(event.data);
+        addPoint(dp);
+        addAlert(dp);
+    };
+    ws.onclose = function() {
+        console.warn('WebSocket closed; reconnecting in 2s...');
+        setTimeout(() => {
+            // simple reconnect logic
+            window.location.reload();
+        }, 2000);
+    };
+    ws.onerror = function(err) {
+        console.error('WebSocket error:', err);
+    };
+</script>
+</body>
+</html>
